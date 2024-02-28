@@ -1,0 +1,146 @@
+% 11. Generare semnal OFDM în 1024 puncte (sau N puncte), alegere modulație subpurtătoare
+% (o singură modulație), inserare efecte deviație de frecvență, demodulare OFDM, 
+% calcul SNR datorat deviației de frecvență (diferență simboluri intrare și ieșire). – 2 pers.
+
+
+close all;
+clear all;
+
+bps = 4;    % Bits per symbol
+M = 2^bps;  % 16QAM
+osf=3;%oversamplingfactor
+
+
+
+N=64;%total number of carriers
+Nvirtual=12;%number of null carriers
+Nused=N-Nvirtual;%number of used carriers
+Cp=20;%length of the cyclic prefix
+Symbol_duration=N+Cp;%symbol duration
+nullidx  = [1:6  N-5:N]';%null idx
+
+
+fsubp=15000;%frecv subpurt ofdm
+fsimbol=fsubp/(1+Cp/N);
+Tsimbol=1/fsimbol;%perioada de simbol -15k
+BW=N*fsubp;%banda semnalului ofdm
+Te=1/BW;%perioada de esantionare
+
+
+
+
+%generate 3 symbols
+number_of_symbols=3;
+
+txsymbols = randi([0 M-1],Nused,number_of_symbols);%generate symbols
+zerov=zeros(6,3);
+txsymbols=vertcat(zerov, txsymbols,zerov);
+
+tx_qam_symbols = qammod(txsymbols,M,UnitAveragePower=true);
+
+txout = ofdmmod(tx_qam_symbols,N,Cp);
+
+%txout2= ofdmmod(tx_qam_symbols,N,Cp,nullidx,OversamplingFactor=osf);
+%txout=ifft(tx_qam_symbols,)
+
+Symbol_length=length(txout)/number_of_symbols;
+
+%freq deviation
+frequency_offset=0.1;
+
+%freq deviations
+phase_offsets1 = exp(1i * 2 * pi * frequency_offset *(1/N)*(0:N-1));
+
+phase_offsets2= [phase_offsets1(N-19:N), phase_offsets1];%adding cyclic prefix
+phase_offsets2_2=  exp(1i * 2 * pi * frequency_offset *(1/N)*(0:N-1+Cp));%adding cyclic prefix
+
+phase_offsets3=[phase_offsets2_2 phase_offsets2_2 phase_offsets2_2];%3 symbols
+txout_shifted=txout.*phase_offsets3';  
+
+
+
+
+
+%display 3 symbols
+figure;
+
+for d=1:3
+    subplot(6,1,d);
+    plot(Tsimbol*((d-1)*(N+Cp):d*(N+Cp)-1)/Symbol_length,real(txout((d-1)*(N+Cp)+1:d*(N+Cp))));
+    titleString = sprintf('Symbol %d ',d);
+    title(titleString);
+    
+    subplot(6,1,3+d);
+    plot(Tsimbol*((d-1)*(N+Cp):d*(N+Cp)-1)/Symbol_length,real(txout_shifted((d-1)*(N+Cp)+1:d*(N+Cp))));
+    titleString = sprintf('Symbol %d offseted',d);
+    title(titleString);
+end
+sgtitle('Transmission without upsampling')
+
+txout2=upsample(txout,3);
+
+phase_offsets1_ovs1= exp(1i * 2 * pi * (frequency_offset/3) *(0:(3*(N+Cp)-1)));
+phase_offsets2_ovs2=[phase_offsets1_ovs1 phase_offsets1_ovs1 phase_offsets1_ovs1];
+txout2_shifted=phase_offsets2_ovs2.*txout2';
+
+power_comp_ovs=sum(real(txout2).^2);
+power_comp_ovs_shifted=sum(real(txout2_shifted').^2);
+%upsampled signal
+figure;
+for d=1:3
+    subplot(6,1,d);
+    stem(Tsimbol*(3*(d-1)*(N+Cp):3*d*(N+Cp)-1)/(Symbol_length*3),real(txout2(3*(d-1)*(N+Cp)+1:3*d*(N+Cp))));
+    titleString = sprintf('Symbol %d ',d);
+    title(titleString);
+    
+    
+    subplot(6,1,3+d);
+    stem(Tsimbol*(3*(d-1)*(N+Cp):3*d*(N+Cp)-1)/(Symbol_length*3),real(txout2_shifted(3*(d-1)*(N+Cp)+1:3*d*(N+Cp))));
+    titleString = sprintf('Symbol %d offseted',d);
+    title(titleString);
+end
+sgtitle('Transmission upsampled')
+
+
+
+rx_qam_1=ofdmdemod(txout_shifted,N,Cp,20);
+rxsymbols=qamdemod(rx_qam_1,M,UnitAveragePower=true);
+
+global_SER_ratio=0;
+global_BER_ratio=0;
+
+%compute noise power by substracting the power of receivedsignal from the transmitted signal
+
+tx_power_comp=mean(abs(txout(:)).^2);
+rx_power_comp=mean(abs(txout_shifted(:)).^2);
+
+noise_power=abs(power_comp_ovs_shifted-power_comp_ovs);
+rap=power_comp_ovs/noise_power;
+SNR=10*log10(rap);
+
+
+% % 
+% % %second method for calculating power
+% % alpha=0.1;
+P_sub = mean(abs(tx_qam_symbols).^2); % Average power of a subcarrier
+ICI_power_per_subcarrier = P_sub *  frequency_offset^2; % ICI power per subcarrier
+% % 
+% % % Calculate total ICI power
+total_ICI_power = N * ICI_power_per_subcarrier; % Total ICI power for N subcarriers
+SNR2=10*log10(P_sub/ICI_power_per_subcarrier);
+
+for i=1:3
+
+[symbol_errors,symbol_error_ratio]=symerr(rxsymbols(:,i),txsymbols(:,i));
+
+[bit_errors,bit_error_ratio]=biterr(rxsymbols(:,i),txsymbols(:,i));
+global_BER_ratio=bit_error_ratio+global_BER_ratio;
+global_SER_ratio=symbol_error_ratio+global_SER_ratio;
+fprintf('There are %d errored simbols for ofdm symbol %d \n ',symbol_errors,i);
+fprintf('There are %d errored bits for ofdm symbol %d \n ',bit_errors,i);
+end
+
+
+fprintf('Global SER is %f ',global_SER_ratio/3);
+fprintf('Global BER is %f \n',global_BER_ratio/3);
+fprintf('SNR given by frequency deviation is %f ',SNR2);
